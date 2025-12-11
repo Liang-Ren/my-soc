@@ -1,5 +1,7 @@
-@"
 terraform/.terraform/
 terraform/terraform.tfstate
 terraform/terraform.tfstate.*
-"@ | Out-File -Encoding utf8 .gitignore
+
+# root-level Terraform state (if present)
+terraform.tfstate
+terraform.tfstate.*
