@@ -1,4 +1,4 @@
-# my-soc – Terraform SOC Lab (Threat Model → Detection → Response)
+# my-soc: Terraform SOC Lab (Threat Model → Detection → Response/Automation/MITRE/ML)
 
 > Goal: Show pipeline **Threat Model → Detection → Response** on AWS using Terraform + native security services.
 
@@ -147,7 +147,27 @@ This matches the end-to-end story: **Threat Model → Detection → Kill-chain r
 
 ---
 
-## 6. How to Pitch This Project
+## 6. Advanced Logging & Analytics (New Modules)
+
+These pieces are implemented in `terraform/advanced_logging.tf` and by updating the web EC2 instances:
+
+- **CloudWatch Agent on web servers (OS/app logs)**
+  - CloudWatch Logs → `/aws/my-soc/web-os` and `/aws/my-soc/web-app` to see OS and HTTP logs per instance.
+
+- **Route 53 Resolver query logging for DNS visibility**
+  - CloudWatch Logs → `/aws/my-soc/route53-resolver` to see DNS queries from resources in the VPC.
+
+- **Athena + Glue Catalog foundation for deeper correlation**
+  - Go to Glue Crawler → setup table data source → data formalized → advanced correlation at SQL level ready 
+  - Go to Athema query whatever you want in DB `my-soc_security_logs`.
+
+- **OpenSearch for full-text search and dashboards**
+  - Stream CloudWatch Logs into OpenSearch for your full-text search and correlation query.
+  - Manually setup observability search and security analytics → Indexing → SIEM Query → Alerting 
+
+---
+
+## 7. How to Pitch This Project
 
 - **One-liner**: "Built a Terraform-based AWS SOC lab (ALB + web servers) with CloudTrail, VPC Flow Logs, Config, GuardDuty, Security Hub, and kill-chain notifications, plus detection content and IR playbooks mapped to MITRE ATT&CK."
 - **Problem you solve**: Provide a reproducible lab to test and demonstrate cloud threat detection and incident response workflows.
@@ -159,11 +179,8 @@ This matches the end-to-end story: **Threat Model → Detection → Kill-chain r
 
 ---
 
-## 7. Next Steps/Extensions
+## 8. Next Steps/Extensions
 
-- Add **CloudWatch Agent** on web servers to push OS/app logs
-- Enable **Route 53 Resolver query logging** for DNS visibility
-- Export logs to **Athena/OpenSearch** for deeper correlation
 - Automate manual analysis/query/detections parts (queries in CloudWatch Insights/Athena) 
 - Automate/semi-auto manual response actions (containments/eradications/recovery) 
 - Generate consolidated **kill-chain Incident** as per MITRE ATT&CK TTP patterns 
@@ -173,4 +190,4 @@ This matches the end-to-end story: **Threat Model → Detection → Kill-chain r
   - Pattern Matched → HIGH Incident Triggered 
 - **ML-driven** findings triage to HIGH Incident fully automated 
 - **CloudGoat** simulates threats → Best practice **GCFR** responses 
-- Integrate with ticketing/chat (e.g. send SNS notifications into Slack, Jira) 
+- Integrate with **Ticketing/Chat** (e.g. send SNS notifications into Slack, Jira) 

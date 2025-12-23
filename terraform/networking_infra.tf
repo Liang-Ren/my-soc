@@ -168,13 +168,55 @@ resource "aws_instance" "web" {
   instance_type = var.instance_type
   subnet_id     = element(values(aws_subnet.public)[*].id, count.index)
   vpc_security_group_ids = [aws_security_group.web.id]
+  iam_instance_profile    = aws_iam_instance_profile.web_instance.name
 
   user_data = <<-EOF
               #!/bin/bash
-              yum install -y httpd
+
+              # Install Apache and CloudWatch Agent (Amazon Linux 2023)
+              dnf install -y httpd amazon-cloudwatch-agent || yum install -y httpd amazon-cloudwatch-agent
+
+              # Simple web page
               echo "hello, Liang from my-soc." > /var/www/html/index.html
               systemctl enable httpd
               systemctl start httpd
+
+              # CloudWatch Agent configuration for OS and Apache logs
+              cat >/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'AGENTCFG'
+              {
+                "logs": {
+                  "logs_collected": {
+                    "files": {
+                      "collect_list": [
+                        {
+                          "file_path": "/var/log/messages",
+                          "log_group_name": "${aws_cloudwatch_log_group.web_os.name}",
+                          "log_stream_name": "{instance_id}-os"
+                        },
+                        {
+                          "file_path": "/var/log/httpd/access_log",
+                          "log_group_name": "${aws_cloudwatch_log_group.web_app.name}",
+                          "log_stream_name": "{instance_id}-access"
+                        },
+                        {
+                          "file_path": "/var/log/httpd/error_log",
+                          "log_group_name": "${aws_cloudwatch_log_group.web_app.name}",
+                          "log_stream_name": "{instance_id}-error"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "agent": {
+                  "run_as_user": "root"
+                }
+              }
+              AGENTCFG
+
+              /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+                -a fetch-config -m ec2 \
+                -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json \
+                -s
               EOF
 
   tags = {
