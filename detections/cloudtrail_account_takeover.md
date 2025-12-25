@@ -4,6 +4,7 @@
 - **MITRE ATT&CK**:
   - Initial Access: `T1078 – Valid Accounts`
   - Defense Evasion: `T1078.004 – Cloud Accounts`
+- **When to use (triage)**: After a GuardDuty / Security Hub alert about anomalous or suspicious console login activity, use these queries to validate many‑failures‑then‑success patterns and to investigate source IPs, geos, and user agents.
 
 ## Key log sources
 

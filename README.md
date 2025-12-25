@@ -78,32 +78,32 @@ After apply finishes, Terraform will output:
 
 ---
 
-## 3. Detection Content (detections/)
+## 3. Triage & Analysis Content (detections/)
 
 Directory: `detections/`
+
+These are **second-stage triage / analysis queries** you run **after an initial alert** from GuardDuty / Security Hub. They help you confirm, scope, and understand the root cause of an incident.
 
 For each scenario you have:
 
 1. `cloudtrail_account_takeover.md`
-   - Threat: stolen credentials used for Console login
-   - MITRE: `T1078 Valid Accounts`, `T1078.004 Cloud Accounts`
-   - Key fields: `eventName=ConsoleLogin`, `responseElements.ConsoleLogin`, `sourceIPAddress`, `userAgent`
-   - Ready-to-run CloudWatch Insights query for "many failures then success" patterns
+  - Threat: stolen credentials used for Console login
+  - MITRE: `T1078 Valid Accounts`, `T1078.004 Cloud Accounts`
+  - When to use: after a GuardDuty / Security Hub login‑related alert (e.g. anomalous console login, brute force) to validate "many failures then success" patterns and investigate IPs / devices.
 2. `privilege_abuse.md`
-   - Threat: over-privileged IAM principal changing/using `*:*` policies
-   - MITRE: `T1098 Account Manipulation`, `T1068 Exploitation for Privilege Escalation`
-   - Key fields: IAM policy documents with `"Action":"*"` and `"Resource":"*"`
-   - Query examples for dangerous IAM policy changes
+  - Threat: over-privileged IAM principal changing/using `*:*` policies
+  - MITRE: `T1098 Account Manipulation`, `T1068 Exploitation for Privilege Escalation`
+  - When to use: after a privilege‑escalation / new‑admin‑role type finding in GuardDuty / Security Hub to review exact IAM policy changes.
 3. `public_s3_bucket.md`
-   - Threat: public S3 bucket used for data exposure/exfiltration
-   - MITRE: `T1530 Data from Cloud Storage`, `T1567.002 Exfiltration to Cloud Storage`
-   - Key: Config rules + CloudTrail `PutBucketAcl`/`PutBucketPolicy`
+  - Threat: public S3 bucket used for data exposure/exfiltration
+  - MITRE: `T1530 Data from Cloud Storage`, `T1567.002 Exfiltration to Cloud Storage`
+  - When to use: after Config / Security Hub flags a public S3 bucket to confirm which bucket, who changed it, and potential exposure window.
 4. `guardduty_high_severity.md`
-   - Threat: HIGH/CRITICAL GuardDuty findings
-   - Mapping to various ATT&CK techniques depending on finding type
-   - Example Athena query over exported GuardDuty findings
+  - Threat: HIGH/CRITICAL GuardDuty findings
+  - Mapping to various ATT&CK techniques depending on finding type
+  - When to use: when there are multiple high‑severity findings and you want to group them by resource / type / time (via Athena) to see campaigns or kill‑chain patterns.
 
-Notes: In production, these queries would be encoded as SIEM/Security Lake alert rules; here they are shown as Insights/Athena queries for validation and demo. 
+Notes: In production, these queries would be encoded as SIEM/Security Lake **alert/analytics rules**; here they are shown as Insights/Athena/OpenSearch queries for validation, triage, and threat hunting. 
 
 ---
 
@@ -167,7 +167,26 @@ These pieces are implemented in `terraform/advanced_logging.tf` and by updating 
 
 ---
 
-## 7. How to Pitch This Project
+## 7. Semi-Automatic Triage & Analysis (Lambda + SNS)
+
+Implemented in `terraform/triage_automation.tf` + `terraform/lambda/triage_links_handler.py`.
+
+- **Trigger**: existing EventBridge rule for HIGH/CRITICAL Security Hub findings now also invokes a Lambda (`my-soc-triage-links`).
+- **Logic**: the Lambda inspects the finding and classifies it into one of the 4 lab scenarios:
+  - Account takeover → `detections/cloudtrail_account_takeover.md` / `playbooks/scenario1_account_takeover.md`
+  - Privilege abuse → `detections/privilege_abuse.md` / `playbooks/scenario2_privilege_abuse.md`
+  - Public S3 bucket → `detections/public_s3_bucket.md` / `playbooks/scenario3_public_s3.md`
+  - Other high-severity GuardDuty → `detections/guardduty_high_severity.md` / `playbooks/scenario4_guardduty_critical.md`
+- **Output**: publishes an email to SNS topic `${var.project_prefix}-triage-topic` (subscribed to `liang.ren@live.ca`) containing:
+  - Severity, finding ID, and a **Security Hub finding URL** (best-effort deep link).
+  - Which scenario to use, and which detections/playbook docs to open.
+  - Short triage hints (which log sources / queries to run).
+
+This turns the detections/ content into a **semi-automatic triage helper**: once an alert fires, you receive an email that points you directly to the right scenario, finding page, and analysis steps.
+
+---
+
+## 8. How to Pitch This Project
 
 - **One-liner**: "Built a Terraform-based AWS SOC lab (ALB + web servers) with CloudTrail, VPC Flow Logs, Config, GuardDuty, Security Hub, and kill-chain notifications, plus detection content and IR playbooks mapped to MITRE ATT&CK."
 - **Problem you solve**: Provide a reproducible lab to test and demonstrate cloud threat detection and incident response workflows.
@@ -179,9 +198,64 @@ These pieces are implemented in `terraform/advanced_logging.tf` and by updating 
 
 ---
 
-## 8. Next Steps/Extensions
+## 9. End-to-End Walkthroughs (Alert → Triage → Response)
 
-- Automate manual analysis/query/detections parts (queries in CloudWatch Insights/Athena) 
+These examples are designed for demos/interviews so you can clearly explain **what happens from the first alert to final response**.
+
+### Walkthrough 1 – Account Takeover (Console Login)
+
+1. **Initial alert (GuardDuty/Security Hub)**  
+  - Simulate suspicious console activity (wrong passwords, login from unusual IP).  
+  - GuardDuty raises findings like `UnauthorizedAccess:IAMUser/ConsoleLogin` or `Recon:IAMUser/NetworkPermissions`, which are aggregated in **Security Hub**.  
+  - If severity is HIGH/CRITICAL, the finding also goes through **EventBridge → SNS kill-chain topic**.
+2. **Triage / analysis (detections/)**  
+  - Open `detections/cloudtrail_account_takeover.md`.  
+  - Run the suggested **CloudWatch Logs Insights** or **Athena** queries against CloudTrail to:  
+    - Confirm the exact **ConsoleLogin** pattern (many failures then success).  
+    - Enrich with IP, UA, geo, and recent API calls by that principal.  
+  - Decide whether this is truly suspicious vs. a user mistake.
+3. **Response (playbooks/)**  
+  - Open `playbooks/scenario1_account_takeover.md`.  
+  - Walk through **Containment → Eradication → Recovery**: disable credentials, revoke sessions, rotate keys, reset MFA, notify user, and document the incident.
+
+When you present this: emphasize how **GuardDuty gives the first signal**, and `detections/cloudtrail_account_takeover.md` + `playbooks/scenario1_account_takeover.md` give you a structured way to go from signal → root cause → action.
+
+### Walkthrough 2 – Privilege Abuse (Over-Privileged IAM)
+
+1. **Initial alert (Security Hub / Config / GuardDuty)**  
+  - Make or simulate a risky IAM change (attach `*:*` permissions, create a new admin role, etc.).  
+  - AWS managed standards in **Security Hub** and **Config rules** will flag non-compliant IAM policies; GuardDuty may also detect suspicious IAM activity.  
+2. **Triage / analysis (detections/)**  
+  - Open `detections/privilege_abuse.md`.  
+  - Use the IAM-focused CloudTrail queries to:  
+    - Identify **who** changed which policy, on which resource, and **when**.  
+    - See whether the new privileges were actually used for sensitive APIs.  
+3. **Response (playbooks/)**  
+  - Open `playbooks/scenario2_privilege_abuse.md`.  
+  - Follow the playbook to roll back risky IAM changes, validate legitimate business need, and harden IAM baselines.
+
+When you present this: highlight how **compliance-style findings** (Security Hub, Config) turn into an **incident** once you see suspicious use of new privileges, and how the playbook standardizes the rollback.
+
+### Walkthrough 3 – Public S3 Bucket Exposure
+
+1. **Initial alert (Config / Security Hub)**  
+  - Create or modify an S3 bucket to be public.  
+  - **AWS Config** and **Security Hub** detect the public bucket and raise findings (e.g., S3.1 controls).  
+2. **Triage / analysis (detections/)**  
+  - Open `detections/public_s3_bucket.md`.  
+  - Use the provided queries to:  
+    - Confirm which bucket is public and which policy change caused it.  
+    - Check access logs / CloudTrail to see whether the bucket has already been accessed externally.  
+3. **Response (playbooks/)**  
+  - Open `playbooks/scenario3_public_s3.md`.  
+  - Execute the steps to immediately block public access, validate whether data was exposed, notify data owners, and plan longer-term remediations.
+
+When you present this: stress that this is a **classic cloud data exposure** scenario and that you have a clear, repeatable runbook from alert to closure.
+
+---
+
+## 10. Next Steps/Extensions
+
 - Automate/semi-auto manual response actions (containments/eradications/recovery) 
 - Generate consolidated **kill-chain Incident** as per MITRE ATT&CK TTP patterns 
   - Define TTP/kill-chain pattern（YAML/JSON）
@@ -189,5 +263,4 @@ These pieces are implemented in `terraform/advanced_logging.tf` and by updating 
   - Daily **Lambda/Python** to pivot/group findings (in the last 1-3 months) by host/user  
   - Pattern Matched → HIGH Incident Triggered 
 - **ML-driven** findings triage to HIGH Incident fully automated 
-- **CloudGoat** simulates threats → Best practice **GCFR** responses 
-- Integrate with **Ticketing/Chat** (e.g. send SNS notifications into Slack, Jira) 
+- **CloudGoat** simulates threats → Best practice responses 

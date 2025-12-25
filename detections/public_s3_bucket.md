@@ -4,6 +4,7 @@
 - **MITRE ATT&CK**:
   - Collection: `T1530 – Data from Cloud Storage`
   - Exfiltration: `T1567.002 – Exfiltration to Cloud Storage`
+- **When to use (triage)**: After AWS Config / Security Hub flags a bucket as public, use these queries to confirm which bucket is affected, who changed the ACL/policy, and to understand the potential exposure window.
 
 ## Key log sources
 

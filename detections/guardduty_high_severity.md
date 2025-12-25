@@ -5,6 +5,7 @@
   - `Recon:EC2/Portscan` → `TA0043 – Reconnaissance`
   - `UnauthorizedAccess:EC2/SSHBruteForce` → `T1110 – Brute Force`
   - `CredentialAccess:IAMUser/AnomalousBehavior` → `T1078 – Valid Accounts`
+- **When to use (triage)**: When multiple HIGH/CRITICAL GuardDuty findings are firing (and already sent through Security Hub / SNS in this lab), use these Athena queries to cluster by resource, finding type, and time window to see campaigns and kill‑chains instead of isolated alerts.
 
 ## Key log sources
 

@@ -4,6 +4,7 @@
 - **MITRE ATT&CK**:
   - Privilege Escalation: `T1068`, `T1098`
   - Defense Evasion: `T1078`
+- **When to use (triage)**: After GuardDuty / Security Hub reports privilege‑escalation, new admin roles, or risky IAM policy changes, use these queries to see exactly which policies were modified, by whom, and when.
 
 ## Key log sources
 
