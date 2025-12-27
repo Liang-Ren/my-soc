@@ -18,9 +18,9 @@ resource "aws_iam_role" "web_instance" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
+      Effect    = "Allow"
       Principal = { Service = "ec2.amazonaws.com" }
-      Action   = "sts:AssumeRole"
+      Action    = "sts:AssumeRole"
     }]
   })
 }
@@ -93,9 +93,9 @@ resource "aws_iam_role" "glue_crawler" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
+      Effect    = "Allow"
       Principal = { Service = "glue.amazonaws.com" }
-      Action   = "sts:AssumeRole"
+      Action    = "sts:AssumeRole"
     }]
   })
 }
@@ -127,8 +127,8 @@ resource "aws_iam_role_policy" "glue_crawler_s3" {
 }
 
 resource "aws_glue_crawler" "cloudtrail" {
-  name         = "${var.project_prefix}-cloudtrail-crawler"
-  role         = aws_iam_role.glue_crawler.arn
+  name          = "${var.project_prefix}-cloudtrail-crawler"
+  role          = aws_iam_role.glue_crawler.arn
   database_name = aws_glue_catalog_database.security_logs.name
   table_prefix  = "cloudtrail_"
 

@@ -163,12 +163,12 @@ data "aws_ami" "amazon_linux" {
 }
 
 resource "aws_instance" "web" {
-  count         = 2
-  ami           = data.aws_ami.amazon_linux.id
-  instance_type = var.instance_type
-  subnet_id     = element(values(aws_subnet.public)[*].id, count.index)
+  count                  = 2
+  ami                    = data.aws_ami.amazon_linux.id
+  instance_type          = var.instance_type
+  subnet_id              = element(values(aws_subnet.public)[*].id, count.index)
   vpc_security_group_ids = [aws_security_group.web.id]
-  iam_instance_profile    = aws_iam_instance_profile.web_instance.name
+  iam_instance_profile   = aws_iam_instance_profile.web_instance.name
 
   user_data = <<-EOF
               #!/bin/bash

@@ -112,7 +112,7 @@ resource "aws_cloudwatch_event_rule" "s3_public_auto_remediate" {
   description = "Auto-remediate public S3 buckets based on Security Hub findings"
 
   event_pattern = jsonencode({
-    "source"      : ["aws.securityhub"],
+    "source" : ["aws.securityhub"],
     "detail-type" : ["Security Hub Findings - Imported"],
     "detail" : {
       "findings" : {
@@ -231,7 +231,7 @@ resource "aws_cloudwatch_event_rule" "securityhub_quarantine_ec2" {
   description = "Invoke quarantine EC2 lambda from Security Hub custom action"
 
   event_pattern = jsonencode({
-    "source"      : ["aws.securityhub"],
+    "source" : ["aws.securityhub"],
     "detail-type" : ["Security Hub Findings - Custom Action"],
     "detail" : {
       "actionName" : [aws_securityhub_action_target.quarantine_ec2.name]

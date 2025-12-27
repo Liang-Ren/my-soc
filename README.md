@@ -231,12 +231,22 @@ This turns the detections/ content into a **semi-automatic triage helper**: once
 
 ---
 
-## 9. Next Steps/Extensions
+## 9. Build a consolidated **kill-chain Incident**
 
-- Build a consolidated **kill-chain Incident** view as a second-level alert (grouping multiple findings for the same host/account by MITRE ATT&CK TTP): 
-  - Define **MITRE ATT&CK** TTP/kill-chain patterns (YAML/JSON). 
-  - Tag findings with **tactics**.  
-  - Run a daily **Lambda** job to pivot/group findings (over the last 1–3 months) by host/user.  
-  - When a pattern matches, raise a HIGH-severity "kill-chain incident" in **SSM Incident Manager**. 
+This lab now has a **simulated Incident Manager** built from Security Hub + Lambda + DynamoDB + SNS:
+
+- **Daily consolidated kill-chain view (second-level alert)**  
+  - Implemented by `aws_lambda_function.killchain_daily_aggregator` in `terraform/incident_manager.tf` + `terraform/lambda/killchain_daily_aggregator.py`.  
+  - Tag findings with **tactics** by parsing `Finding.Types`.  
+  - Run a daily **Lambda** job every 24 hours to pull ACTIVE Security Hub findings over the last 1 month, then group them by **host** and aggregated **tactics**.  
+  - When a host has findings involving **2 or more distinct tactics**, raise or append to an incident in the DynamoDB table `${var.project_prefix}-killchain-incidents` and send a consolidated email via the kill-chain SNS topic.  
+  - If a host already has an open incident (`status = OPEN`), the Lambda **attaches the new findings group to that incident** (updates `findings` and `tactics`) instead of creating a new one.
+
+This gives you a consolidated kill-chain **Incident** per host, summarizing multi-tactic activity over time in DynamoDB and email.
+
+---
+
+## 10. Next Steps/Extensions
+ 
 - Add **ML-driven** triage to promote suspicious finding clusters to HIGH incidents automatically. 
 - Use **CloudGoat** to simulate realistic threats and validate best-practice responses.

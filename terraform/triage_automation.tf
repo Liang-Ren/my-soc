@@ -21,9 +21,9 @@ resource "aws_iam_role" "triage_lambda" {
     Version = "2012-10-17",
     Statement = [
       {
-        Effect = "Allow",
+        Effect    = "Allow",
         Principal = { Service = "lambda.amazonaws.com" },
-        Action   = "sts:AssumeRole"
+        Action    = "sts:AssumeRole"
       }
     ]
   })
@@ -73,14 +73,14 @@ resource "aws_lambda_function" "triage_links" {
   filename         = data.archive_file.triage_lambda.output_path
   source_code_hash = data.archive_file.triage_lambda.output_base64sha256
 
-  timeout      = 10
-  memory_size  = 128
+  timeout     = 10
+  memory_size = 128
 
   environment {
     variables = {
       TRIAGE_SNS_TOPIC_ARN = aws_sns_topic.triage.arn
-      PROJECT_PREFIX        = var.project_prefix
-      IAM_ROLLBACK_API_ID   = aws_apigatewayv2_api.iam_rollback_api.id
+      PROJECT_PREFIX       = var.project_prefix
+      IAM_ROLLBACK_API_ID  = aws_apigatewayv2_api.iam_rollback_api.id
     }
   }
 
