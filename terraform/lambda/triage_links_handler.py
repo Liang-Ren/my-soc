@@ -30,6 +30,7 @@ SCENARIO_CONFIG: Dict[str, Dict[str, str]] = {
             "CloudTrail / Athena: search for IAM policy changes (Put*Policy, Attach*Policy, CreatePolicy) "
             "around the time of this finding, and see if new privileges were used."
         ),
+        "approve_rollback_hint": "To approve rollback, click the Approve link in this email.",
     },
     "public_s3_bucket": {
         "title": "Public S3 Bucket Exposure",
@@ -114,6 +115,15 @@ def _build_email_body(scenario_key: str, finding: Dict[str, Any], event_region: 
             f"https://{region}.console.aws.amazon.com/securityhub/home?region={region}#/findings"
         )
 
+    # Optional approve-rollback link for privilege abuse scenario (Scenario 2)
+    approve_link = None
+    if scenario_key == "privilege_abuse":
+        api_id = os.environ.get("IAM_ROLLBACK_API_ID", "")
+        if api_id:
+            approve_link = (
+                f"https://{api_id}.execute-api.{region}.amazonaws.com/approve-iam-rollback"
+            )
+
     # Keep finding JSON short-ish to avoid very large emails
     finding_json = json.dumps(finding, indent=2)[:6000]
 
@@ -132,6 +142,18 @@ def _build_email_body(scenario_key: str, finding: Dict[str, Any], event_region: 
         f"Detections doc: {cfg['detection_doc']}",
         f"Playbook doc: {cfg['playbook_doc']}",
         "",
+    ]
+
+    # Optional approval section for scenario 2 (privilege abuse)
+    if scenario_key == "privilege_abuse":
+        lines.append("How to approve response (if applicable):")
+        if approve_link:
+            lines.append(f"- To approve IAM privilege rollback, click: {approve_link}")
+        else:
+            lines.append("- IAM rollback approval URL is not configured in this environment.")
+
+    lines.extend([
+        "",
         "How to triage now:",
         f"- {cfg['query_hint']}",
         "- Open the detections doc in your repo and copy the sample queries into CloudWatch Logs Insights / Athena / OpenSearch.",
@@ -139,7 +161,7 @@ def _build_email_body(scenario_key: str, finding: Dict[str, Any], event_region: 
         "",
         "=== Raw Finding (truncated for reference) ===",
         finding_json,
-    ]
+    ])
 
     return "\n".join(lines)
 

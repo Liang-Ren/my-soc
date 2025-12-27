@@ -80,6 +80,7 @@ resource "aws_lambda_function" "triage_links" {
     variables = {
       TRIAGE_SNS_TOPIC_ARN = aws_sns_topic.triage.arn
       PROJECT_PREFIX        = var.project_prefix
+      IAM_ROLLBACK_API_ID   = aws_apigatewayv2_api.iam_rollback_api.id
     }
   }
 

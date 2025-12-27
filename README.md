@@ -103,11 +103,20 @@ For each scenario you have:
   - Mapping to various ATT&CK techniques depending on finding type
   - When to use: when there are multiple high‑severity findings and you want to group them by resource / type / time (via Athena) to see campaigns or kill‑chain patterns.
 
+**End-to-end usage (Alert → Triage → Response)**
+
+Each detection file is meant to be used in an end‑to‑end flow:
+
+- **Scenario 1 – Account takeover**: GuardDuty / Security Hub raises login‑related findings → you triage with `cloudtrail_account_takeover.md` (ConsoleLogin patterns, IP/UA/geo, follow‑up API calls) → you execute response steps in `playbooks/scenario1_account_takeover.md`.
+- **Scenario 2 – Privilege abuse**: Security Hub / Config / GuardDuty flags risky IAM changes → you triage with `privilege_abuse.md` (who changed which policy, and how it was used) → you follow `playbooks/scenario2_privilege_abuse.md` to roll back permissions and harden IAM.
+- **Scenario 3 – Public S3 bucket**: Config / Security Hub detects a public bucket → you triage with `public_s3_bucket.md` (which bucket, who changed it, whether it was accessed) → you run `playbooks/scenario3_public_s3.md` to block public access and assess exposure.
+- **Scenario 4 – High‑severity GuardDuty campaign**: multiple HIGH/CRITICAL GuardDuty findings fire → you triage with `guardduty_high_severity.md` (group by resource / principal / time via Athena) → you apply `playbooks/scenario4_guardduty_critical.md` to contain impacted resources.
+
 Notes: In production, these queries would be encoded as SIEM/Security Lake **alert/analytics rules**; here they are shown as Insights/Athena/OpenSearch queries for validation, triage, and threat hunting. 
 
 ---
 
-## 4. Response Playbooks (playbooks/)
+## 4. Response Playbooks & Automation (playbooks/ + Lambda)
 
 Directory: `playbooks/`
 
@@ -126,7 +135,31 @@ In a real SOC, playbooks are not just documentation – they are often **codifie
   - For high‑confidence scenarios (e.g. clearly public S3 buckets), optionally perform **auto‑remediation** (block public access, revoke keys), often behind an approval step.
 - Analysts keep a **human-readable runbook** (like the files in `playbooks/`) in sync with the executable workflow.
 
-This lab focuses on making the response logic explicit in Markdown first; the next step would be to translate these playbooks into EventBridge → Lambda/SSM Automation/SOAR workflows, so that containment and eradication steps can be triggered automatically or with one‑click approval.
+In this lab, several response actions are already automated or semi-automated with Terraform + Lambda (see `terraform/response_automation.tf` + `terraform/lambda/`):
+
+-- **Scenario 1 – Account Takeover**  
+  - Stays fully manual by design: you follow `playbooks/scenario1_account_takeover.md` step by step (disable credentials, revoke sessions, reset MFA, notify user, etc.).
+
+- **Scenario 2 – Privilege Abuse (semi-automatic rollback)**  
+  - An HTTP API `aws_apigatewayv2_api.iam_rollback_api` fronts the Lambda `iam_privilege_rollback_stub.py`.  
+  - For privilege-abuse findings, the triage email contains an **“Approve IAM rollback”** link that calls this API.  
+  - Today the Lambda only logs that an approval was received (good for demoing the approval flow); you can extend it to implement real IAM policy rollback so the "revert permissions" step in the playbook becomes one-click.
+
+- **Scenario 3 – Public S3 Bucket (auto-remediation)**  
+  - Security Hub S3 public findings (resource type `AwsS3Bucket`) trigger the EventBridge rule `aws_cloudwatch_event_rule.s3_public_auto_remediate`.  
+  - That rule calls the Lambda `s3_public_auto_remediate.py`, which parses the bucket name from the finding and runs `PutBucketPublicAccessBlock` (all four Block flags set to true) to close public access.  
+  - This fully automates the "immediately block public access" step from `playbooks/scenario3_public_s3.md`, so analysts can focus on data exposure assessment.
+
+- **Scenario 4 – High-Severity GuardDuty / EC2 (semi-automatic quarantine)**  
+  - Defines a Security Hub custom action `aws_securityhub_action_target.quarantine_ec2` (shown in the console with a short name like `my-soc-q-ec2`).  
+  - When an analyst clicks this action on a finding with an EC2 resource, the EventBridge rule `aws_cloudwatch_event_rule.securityhub_quarantine_ec2` triggers the Lambda `quarantine_ec2.py`, which replaces the instance’s security groups with the isolation SG `aws_security_group.quarantine`.  
+  - This upgrades the "quarantine affected host" step in `playbooks/scenario4_guardduty_critical.md` from fully manual to "human click, system executes".
+
+In short:
+
+- **Alert**: GuardDuty / Security Hub remain the initial alert sources.  
+- **Triage**: `triage_automation.tf` + detections/ provide semi-automatic triage links and queries.  
+- **Response**: `response_automation.tf` turns key playbook actions (closing public S3, quarantining EC2, approving IAM rollback) into one-click or fully automated workflows.
 
 ---
 
@@ -198,69 +231,12 @@ This turns the detections/ content into a **semi-automatic triage helper**: once
 
 ---
 
-## 9. End-to-End Walkthroughs (Alert → Triage → Response)
+## 9. Next Steps/Extensions
 
-These examples are designed for demos/interviews so you can clearly explain **what happens from the first alert to final response**.
-
-### Walkthrough 1 – Account Takeover (Console Login)
-
-1. **Initial alert (GuardDuty/Security Hub)**  
-  - Simulate suspicious console activity (wrong passwords, login from unusual IP).  
-  - GuardDuty raises findings like `UnauthorizedAccess:IAMUser/ConsoleLogin` or `Recon:IAMUser/NetworkPermissions`, which are aggregated in **Security Hub**.  
-  - If severity is HIGH/CRITICAL, the finding also goes through **EventBridge → SNS kill-chain topic**.
-2. **Triage / analysis (detections/)**  
-  - Open `detections/cloudtrail_account_takeover.md`.  
-  - Run the suggested **CloudWatch Logs Insights** or **Athena** queries against CloudTrail to:  
-    - Confirm the exact **ConsoleLogin** pattern (many failures then success).  
-    - Enrich with IP, UA, geo, and recent API calls by that principal.  
-  - Decide whether this is truly suspicious vs. a user mistake.
-3. **Response (playbooks/)**  
-  - Open `playbooks/scenario1_account_takeover.md`.  
-  - Walk through **Containment → Eradication → Recovery**: disable credentials, revoke sessions, rotate keys, reset MFA, notify user, and document the incident.
-
-When you present this: emphasize how **GuardDuty gives the first signal**, and `detections/cloudtrail_account_takeover.md` + `playbooks/scenario1_account_takeover.md` give you a structured way to go from signal → root cause → action.
-
-### Walkthrough 2 – Privilege Abuse (Over-Privileged IAM)
-
-1. **Initial alert (Security Hub / Config / GuardDuty)**  
-  - Make or simulate a risky IAM change (attach `*:*` permissions, create a new admin role, etc.).  
-  - AWS managed standards in **Security Hub** and **Config rules** will flag non-compliant IAM policies; GuardDuty may also detect suspicious IAM activity.  
-2. **Triage / analysis (detections/)**  
-  - Open `detections/privilege_abuse.md`.  
-  - Use the IAM-focused CloudTrail queries to:  
-    - Identify **who** changed which policy, on which resource, and **when**.  
-    - See whether the new privileges were actually used for sensitive APIs.  
-3. **Response (playbooks/)**  
-  - Open `playbooks/scenario2_privilege_abuse.md`.  
-  - Follow the playbook to roll back risky IAM changes, validate legitimate business need, and harden IAM baselines.
-
-When you present this: highlight how **compliance-style findings** (Security Hub, Config) turn into an **incident** once you see suspicious use of new privileges, and how the playbook standardizes the rollback.
-
-### Walkthrough 3 – Public S3 Bucket Exposure
-
-1. **Initial alert (Config / Security Hub)**  
-  - Create or modify an S3 bucket to be public.  
-  - **AWS Config** and **Security Hub** detect the public bucket and raise findings (e.g., S3.1 controls).  
-2. **Triage / analysis (detections/)**  
-  - Open `detections/public_s3_bucket.md`.  
-  - Use the provided queries to:  
-    - Confirm which bucket is public and which policy change caused it.  
-    - Check access logs / CloudTrail to see whether the bucket has already been accessed externally.  
-3. **Response (playbooks/)**  
-  - Open `playbooks/scenario3_public_s3.md`.  
-  - Execute the steps to immediately block public access, validate whether data was exposed, notify data owners, and plan longer-term remediations.
-
-When you present this: stress that this is a **classic cloud data exposure** scenario and that you have a clear, repeatable runbook from alert to closure.
-
----
-
-## 10. Next Steps/Extensions
-
-- Automate/semi-auto manual response actions (containments/eradications/recovery) 
-- Generate consolidated **kill-chain Incident** as per MITRE ATT&CK TTP patterns 
-  - Define TTP/kill-chain pattern（YAML/JSON）
-  - Tag findings with tactics
-  - Daily **Lambda/Python** to pivot/group findings (in the last 1-3 months) by host/user  
-  - Pattern Matched → HIGH Incident Triggered 
-- **ML-driven** findings triage to HIGH Incident fully automated 
-- **CloudGoat** simulates threats → Best practice responses 
+- Build a consolidated **kill-chain Incident** view as a second-level alert (grouping multiple findings for the same host/account by MITRE ATT&CK TTP): 
+  - Define **MITRE ATT&CK** TTP/kill-chain patterns (YAML/JSON). 
+  - Tag findings with **tactics**.  
+  - Run a daily **Lambda** job to pivot/group findings (over the last 1–3 months) by host/user.  
+  - When a pattern matches, raise a HIGH-severity "kill-chain incident" in **SSM Incident Manager**. 
+- Add **ML-driven** triage to promote suspicious finding clusters to HIGH incidents automatically. 
+- Use **CloudGoat** to simulate realistic threats and validate best-practice responses.
