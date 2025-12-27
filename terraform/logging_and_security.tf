@@ -319,6 +319,12 @@ resource "aws_sns_topic" "killchain" {
   name = "${var.project_prefix}-killchain-topic"
 }
 
+resource "aws_sns_topic_subscription" "killchain_email" {
+  topic_arn = aws_sns_topic.killchain.arn
+  protocol  = "email"
+  endpoint  = "liang.ren@live.ca"
+}
+
 resource "aws_sns_topic_policy" "allow_events" {
   arn = aws_sns_topic.killchain.arn
   policy = jsonencode({
