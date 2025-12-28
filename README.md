@@ -242,7 +242,13 @@ This lab now has a **simulated Incident Manager** built from Security Hub + Lamb
   - When a host has findings involving **2 or more distinct tactics**, raise or append to an incident in the DynamoDB table `${var.project_prefix}-killchain-incidents` and send a consolidated email via the kill-chain SNS topic.  
   - If a host already has an open incident (`status = OPEN`), the Lambda **attaches the new findings group to that incident** (updates `findings` and `tactics`) instead of creating a new one.
 
-This gives you a consolidated kill-chain **Incident** per host, summarizing multi-tactic activity over time in DynamoDB and email.
+- **Manual escalation from findings (Workflow.Status = NOTIFIED)**  
+  - Implemented by `aws_lambda_function.escalate_finding_to_incident` in `terraform/incident_manager.tf` + `terraform/lambda/escalate_finding_to_incident.py`.  
+  - When an analyst opens a Security Hub finding and sets **Workflow.Status = NOTIFIED**, an EventBridge rule `aws_cloudwatch_event_rule.securityhub_escalated` forwards that event to the escalation Lambda.  
+  - The Lambda groups the escalated findings by host, creates a new **OPEN** incident (or appends to an existing one) in the same DynamoDB table `${var.project_prefix}-killchain-incidents`, and sends an email via the kill-chain SNS topic describing the newly escalated findings.  
+  - This makes "Escalated to Incident" a simple UI action: change Workflow to NOTIFIED, and the system immediately turns the finding into a tracked incident.
+
+Together, these give you consolidated kill-chain **Incidents** per host, both from rule-based daily aggregation and from on-demand analyst escalation, all stored in DynamoDB and surfaced via email.
 
 ---
 
