@@ -5,6 +5,7 @@ from sklearn.datasets import make_classification
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 import joblib
+import numpy as np
 
 
 def parse_args():
@@ -54,6 +55,41 @@ def main():
 
     joblib.dump(clf, model_path)
     print(f"Saved model to {model_path}")
+
+
+def model_fn(model_dir: str):
+    """SageMaker entrypoint for loading the trained model in inference.
+
+    The scikit-learn container will call this with model_dir pointing to the
+    directory where it has unpacked model.tar.gz (typically /opt/ml/model).
+    We just need to load and return the joblib model.
+    """
+
+    model_path = os.path.join(model_dir, "model.joblib")
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model file not found at {model_path}")
+
+    model = joblib.load(model_path)
+    return model
+
+
+def predict_fn(input_data, model):
+    """SageMaker prediction function.
+
+    Ensures the input is a 2D array of shape (n_samples, n_features)
+    before calling RandomForestClassifier.predict, so single-row
+    CSV inputs don't trigger "Expected 2D array, got 1D array" errors.
+    """
+
+    if hasattr(input_data, "values"):
+        arr = input_data.values
+    else:
+        arr = np.array(input_data)
+
+    if arr.ndim == 1:
+        arr = arr.reshape(1, -1)
+
+    return model.predict(arr)
 
 
 if __name__ == "__main__":

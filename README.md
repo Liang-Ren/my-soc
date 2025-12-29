@@ -290,16 +290,13 @@ Prerequisites:
 Steps (run in PowerShell):
 
 ```powershell
-$jobName = "my-soc-random-forest"   # Or any unique name
-$region  = "us-east-1"              # Must match var.aws_region
-
-# Look up these values in terraform/ml_training.tf outputs/logs if needed
-$roleArn = "arn:aws:iam::<ACCOUNT_ID>:role/my-soc-sagemaker-execution-role"
-$bucket  = "my-soc-ml-models-<ACCOUNT_ID>"
+$jobName = "my-soc-random-forest"   
+$region  = "us-east-1"            
+$accountId = (aws sts get-caller-identity --query Account --output text)
+$roleArn = "arn:aws:iam::$accountId:role/my-soc-sagemaker-execution-role"
+$bucket  = "my-soc-ml-models-$accountId"
 $codeKey = "code/train_random_forest.tar.gz"
-
 $image   = "683313688378.dkr.ecr.$region.amazonaws.com/sagemaker-scikit-learn:1.0-1-cpu-py3"
-
 aws sagemaker create-training-job `
   --region $region `
   --training-job-name $jobName `
@@ -312,16 +309,89 @@ aws sagemaker create-training-job `
 ```
 
 What happens:
-
 - SageMaker launches the official scikit-learn container in your account.
 - The container downloads your training script tarball from `s3://$bucket/$codeKey`.
 - The script generates synthetic data, trains a `RandomForestClassifier`, and saves
   the model into `/opt/ml/model/model.joblib`.
 - SageMaker uploads `/opt/ml/model` as a tarball to `s3://$bucket/artifacts/...`.
 
-Later, you can deploy this model behind an API (for example, a Lambda or
-SageMaker endpoint) and have the triage/kill-chain Lambdas call it to decide
-whether a given finding should be escalated (set `Workflow.Status = NOTIFIED`).
+### 10.3 Deploy a real-time inference endpoint (SageMaker)
+
+Once the training job `my-soc-random-forest` has completed successfully and
+written `model.tar.gz` into the ML models bucket, you can expose a real-time
+inference API using a SageMaker endpoint.
+
+#### 10.3.1. **Create a SageMaker model** (binds the artifact + image + entrypoint):
+
+   The scikit-learn container needs to know **which Python script to run** and
+   where to download it from. We point it at the same training script tarball
+   used for training and set the entrypoint to `train_random_forest.py`.
+
+   ```powershell
+   $region    = "us-east-1"
+   $accountId = (aws sts get-caller-identity --query Account --output text)
+   $bucket    = "my-soc-ml-models-$accountId"
+   $modelName = "my-soc-rf-model"
+   $image     = "683313688378.dkr.ecr.$region.amazonaws.com/sagemaker-scikit-learn:1.0-1-cpu-py3"
+   $roleArn   = aws iam get-role --role-name my-soc-sagemaker-execution-role --query "Role.Arn" --output text
+   $modelData       = "s3://$bucket/artifacts/my-soc-random-forest/output/model.tar.gz"
+   $submitDirectory = "s3://$bucket/code/train_random_forest.tar.gz"
+   $primaryContainer = "Image=$image,ModelDataUrl=$modelData,Environment={SAGEMAKER_PROGRAM=train_random_forest.py,SAGEMAKER_SUBMIT_DIRECTORY=$submitDirectory}"
+   aws sagemaker create-model `
+     --region $region `
+     --model-name $modelName `
+     --primary-container $primaryContainer `
+     --execution-role-arn $roleArn
+   ```
+
+#### 10.3.2. **Create an endpoint config** (instance type/count, traffic routing):
+
+   ```powershell
+   $configName = "my-soc-rf-endpoint-config"
+   aws sagemaker create-endpoint-config `
+     --region $region `
+     --endpoint-config-name $configName `
+     --production-variants "VariantName=AllTraffic,ModelName=$modelName,InitialInstanceCount=1,InstanceType=ml.m5.large"
+   ```
+
+#### 10.3.3. **Create the real-time endpoint** (the actual API):
+
+   ```powershell
+   $endpointName = "my-soc-rf-endpoint"
+   aws sagemaker create-endpoint `
+     --region $region `
+     --endpoint-name $endpointName `
+     --endpoint-config-name $configName
+   ```
+
+   Wait until the endpoint status becomes `InService` in the SageMaker console
+   or via `aws sagemaker describe-endpoint`.
+
+#### 10.3.4. **Call the endpoint for a prediction** (example, CSV input):
+
+   The default scikit-learn container expects tabular features, commonly as a
+   single CSV line. Assuming the model was trained on 10 numeric features:
+
+   ```powershell
+   $endpointName = "my-soc-rf-endpoint"
+   $region       = "us-east-1"
+
+   '0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0' | Out-File -Encoding ascii payload.csv
+
+   aws sagemaker-runtime invoke-endpoint `
+     --region $region `
+     --endpoint-name $endpointName `
+     --content-type text/csv `
+     --body fileb://payload.csv `
+     output.json
+
+   Get-Content .\output.json
+   ```
+
+This endpoint is the **real ML API**. In the next step, you can wire
+my-soc triage or kill-chain Lambdas to call this endpoint (using the
+`sagemaker-runtime` client in boto3) and map its output to
+`escalate / not_escalate` decisions by setting `Workflow.Status = NOTIFIED`.
 
 ---
 
