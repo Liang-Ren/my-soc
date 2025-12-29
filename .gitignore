@@ -5,3 +5,9 @@ terraform/terraform.tfstate.*
 # root-level Terraform state (if present)
 terraform.tfstate
 terraform.tfstate.*
+
+# Lambda deployment ZIPs (built artifacts)
+terraform/lambda/*.zip
+
+# Local ML training tarballs (built artifacts)
+ml/*.tar.gz
