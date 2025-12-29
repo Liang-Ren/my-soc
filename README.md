@@ -252,7 +252,79 @@ Together, these give you consolidated kill-chain **Incidents** per host, both fr
 
 ---
 
-## 10. Next Steps/Extensions
+## 10. ML-driven Triage (Finding to Incident Automatically)
+
+This lab includes the **training side** of an ML model that can later be used to decide
+whether a single Security Hub finding should be escalated to an incident automatically.
+
+- **Model shape**: a real `RandomForestClassifier` implemented with scikit-learn.
+- **Training data**: synthetic binary classification data generated inside the script
+  (no need to manage a separate dataset for this demo).
+- **Training script**: `ml/train_random_forest.py`.
+- **Model export**: SageMaker writes the trained model artifact to the S3 bucket
+  `${var.project_prefix}-ml-models-${account_id}` under the `artifacts/` prefix.
+
+### 10.1 Infrastructure Terraform creates
+
+Implemented in `terraform/ml_training.tf`:
+
+- An S3 bucket for models: `${var.project_prefix}-ml-models-${account_id}`.
+- A SageMaker execution role `aws_iam_role.sagemaker_execution` with permissions to:
+  - Read/write the ML models bucket.
+  - Write training logs to `/aws/sagemaker/*` in CloudWatch Logs.
+- An S3 object `aws_s3_object.ml_training_code` that uploads your local
+  `ml/train_random_forest.tar.gz` to the bucket under `code/train_random_forest.tar.gz`.
+
+After `terraform apply` succeeds, the **code and IAM role are ready**, but we
+start the actual SageMaker training job via AWS CLI.
+
+### 10.2 Start the SageMaker training job (PowerShell + AWS CLI)
+
+Prerequisites:
+
+- You have already run `terraform apply` in `terraform/`.
+- `ml/train_random_forest.tar.gz` exists locally and was uploaded by Terraform
+  as `code/train_random_forest.tar.gz` into the ML models bucket.
+- AWS CLI is installed and configured to use the same account/region.
+
+Steps (run in PowerShell):
+
+```powershell
+$jobName = "my-soc-random-forest"   # Or any unique name
+$region  = "us-east-1"              # Must match var.aws_region
+
+# Look up these values in terraform/ml_training.tf outputs/logs if needed
+$roleArn = "arn:aws:iam::<ACCOUNT_ID>:role/my-soc-sagemaker-execution-role"
+$bucket  = "my-soc-ml-models-<ACCOUNT_ID>"
+$codeKey = "code/train_random_forest.tar.gz"
+
+$image   = "683313688378.dkr.ecr.$region.amazonaws.com/sagemaker-scikit-learn:1.0-1-cpu-py3"
+
+aws sagemaker create-training-job `
+  --region $region `
+  --training-job-name $jobName `
+  --role-arn $roleArn `
+  --algorithm-specification TrainingImage=$image,TrainingInputMode=File `
+  --resource-config InstanceType=ml.m5.large,InstanceCount=1,VolumeSizeInGB=10 `
+  --stopping-condition MaxRuntimeInSeconds=3600 `
+  --output-data-config S3OutputPath=s3://$bucket/artifacts/ `
+  --hyper-parameters "n-estimators=100,max-depth=5,sagemaker_program=train_random_forest.py,sagemaker_submit_directory=s3://$bucket/$codeKey"
+```
+
+What happens:
+
+- SageMaker launches the official scikit-learn container in your account.
+- The container downloads your training script tarball from `s3://$bucket/$codeKey`.
+- The script generates synthetic data, trains a `RandomForestClassifier`, and saves
+  the model into `/opt/ml/model/model.joblib`.
+- SageMaker uploads `/opt/ml/model` as a tarball to `s3://$bucket/artifacts/...`.
+
+Later, you can deploy this model behind an API (for example, a Lambda or
+SageMaker endpoint) and have the triage/kill-chain Lambdas call it to decide
+whether a given finding should be escalated (set `Workflow.Status = NOTIFIED`).
+
+---
+
+## 11. Next Steps/Extensions
  
-- Add **ML-driven** triage to promote suspicious finding clusters to HIGH incidents automatically. 
 - Use **CloudGoat** to simulate realistic threats and validate best-practice responses.
