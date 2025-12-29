@@ -1,0 +1,23 @@
+[
+  {
+    "SchemaVersion": "2018-10-08",
+    "AwsAccountId": "895169747731",
+    "CreatedAt": "2025-12-29T14:24:28.0152385-08:00",
+    "UpdatedAt": "2025-12-29T14:24:28.0152385-08:00",
+    "GeneratorId": "my-soc/ml-test",
+    "Id": "my-soc-ml-test-1",
+    "ProductArn": "arn:aws:securityhub:us-east-1:895169747731:product/895169747731/default",
+    "Title": "ML test finding HIGH",
+    "Description": "Testing my-soc ML auto-triage pipeline",
+    "Severity": { "Label": "HIGH" },
+    "Types": [
+      "Software and Configuration Checks/Industry and Regulatory Standards"
+    ],
+    "Resources": [
+      {
+        "Type": "AwsEc2Instance",
+        "Id": "i-mltest1234567890"
+      }
+    ]
+  }
+]
