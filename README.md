@@ -375,17 +375,13 @@ inference API using a SageMaker endpoint.
    ```powershell
    $endpointName = "my-soc-rf-endpoint"
    $region       = "us-east-1"
-
-   '0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0' | Out-File -Encoding ascii payload.csv
-
    aws sagemaker-runtime invoke-endpoint `
      --region $region `
      --endpoint-name $endpointName `
      --content-type text/csv `
-     --body fileb://payload.csv `
-     output.json
-
-   Get-Content .\output.json
+     --body fileb://ml/payload.csv `
+     ml/output.json
+   Get-Content .\ml\output.json
    ```
 
 This endpoint is the **real ML API**. In the next step, you can wire
