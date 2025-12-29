@@ -6,8 +6,4 @@ terraform/terraform.tfstate.*
 terraform.tfstate
 terraform.tfstate.*
 
-# Lambda deployment ZIPs (built artifacts)
-terraform/lambda/*.zip
-
-# Local ML training tarballs (built artifacts)
-ml/*.tar.gz
+# (intentionally track Lambda ZIPs and ML tarballs in this repo)
