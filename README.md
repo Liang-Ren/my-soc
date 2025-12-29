@@ -384,10 +384,31 @@ inference API using a SageMaker endpoint.
    Get-Content .\ml\output.json
    ```
 
-This endpoint is the **real ML API**. In the next step, you can wire
-my-soc triage or kill-chain Lambdas to call this endpoint (using the
-`sagemaker-runtime` client in boto3) and map its output to
-`escalate / not_escalate` decisions by setting `Workflow.Status = NOTIFIED`.
+### 10.4 ML Auto-Triage from Security Hub Findings
+
+Terraform now wires an **ML auto-triage Lambda** that calls this SageMaker
+endpoint for **every imported Security Hub finding**:
+
+- Implemented by `aws_lambda_function.ml_auto_triage` in `terraform/triage_automation.tf` + `terraform/lambda/ml_auto_triage.py`.
+- Triggered by `aws_cloudwatch_event_rule.securityhub_all_for_ml`, which matches all
+  `Security Hub Findings - Imported` events (all severities).
+- For each finding, the Lambda:
+  - Extracts a simple 10-dimension feature vector (severity bucket, number of resources,
+    product hints, title/description length, S3/public hints, etc.).
+  - Calls the SageMaker endpoint (`my-soc-rf-endpoint` by default) using
+    `sagemaker-runtime.invoke_endpoint` with `text/csv` payload.
+  - Interprets the model output as a score (e.g., `[0]` or `[1]`) and, if the score
+    exceeds a simple threshold, sets `Workflow.Status = NOTIFIED` on that finding via
+    `securityhub.batch_update_findings` and adds a **Note** indicating it was
+    auto-triaged by ML.
+  - Skips findings that are already `Workflow.Status = NOTIFIED` to avoid loops with
+    the manual escalation pipeline.
+
+Once a finding is updated to `Workflow.Status = NOTIFIED`, the **existing** EventBridge
+rule `aws_cloudwatch_event_rule.securityhub_escalated` and the
+`escalate_finding_to_incident` Lambda (Section 9) treat it exactly the same as a
+manual analyst escalation: a kill-chain incident is created/updated in DynamoDB and a
+consolidated incident email is sent via the kill-chain SNS topic.
 
 ---
 

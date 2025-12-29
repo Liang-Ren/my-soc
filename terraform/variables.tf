@@ -33,3 +33,9 @@ variable "allowed_http_cidr" {
   type        = string
   default     = "0.0.0.0/0"
 }
+
+variable "sagemaker_endpoint_name" {
+  description = "Name of the SageMaker endpoint used for ML auto-triage"
+  type        = string
+  default     = "my-soc-rf-endpoint"
+}
