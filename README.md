@@ -414,13 +414,6 @@ High-level ML triage architecture:
 
 ![alt text](image.png)
 
-### 10.5 Notes on Terraform Rebuild (Destroy & Apply)
-
-The following manual CLI needed after **Destroy** 
-- 10.2 aws sagemaker create-training-job (if re-training for new model.tar.gz)
-- 10.3.1–10.3.3 create-model / create-endpoint-config / create-endpoint
-- 10.3.4 invoke-endpoint verification (optional)
-
 ---
 
 ## 11. Next Steps/Extensions
