@@ -312,6 +312,114 @@ resource "aws_inspector2_enabler" "main" {
 }
 
 ###############################
+# CloudTrail -> IAM policy rollback detector (custom Security Hub finding)
+###############################
+
+data "archive_file" "iam_policy_rollback_detector_lambda" {
+  type        = "zip"
+  source_file = "${path.module}/lambda/iam_policy_rollback_detector.py"
+  output_path = "${path.module}/lambda/iam_policy_rollback_detector.zip"
+}
+
+resource "aws_cloudwatch_log_group" "iam_policy_rollback_detector_lambda" {
+  name              = "/aws/lambda/${var.project_prefix}-iam-policy-rollback-detector"
+  retention_in_days = 7
+}
+
+resource "aws_iam_role" "iam_policy_rollback_detector_lambda" {
+  name = "${var.project_prefix}-iam-policy-rollback-detector-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Effect    = "Allow",
+      Principal = { Service = "lambda.amazonaws.com" },
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "iam_policy_rollback_detector_lambda" {
+  name = "${var.project_prefix}-iam-policy-rollback-detector-policy"
+  role = aws_iam_role.iam_policy_rollback_detector_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ],
+        Resource = "arn:${data.aws_partition.current.partition}:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${var.project_prefix}-iam-policy-rollback-detector:*"
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "securityhub:BatchImportFindings"
+        ],
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_lambda_function" "iam_policy_rollback_detector" {
+  function_name = "${var.project_prefix}-iam-policy-rollback-detector"
+  role          = aws_iam_role.iam_policy_rollback_detector_lambda.arn
+  handler       = "iam_policy_rollback_detector.lambda_handler"
+  runtime       = "python3.12"
+
+  filename         = data.archive_file.iam_policy_rollback_detector_lambda.output_path
+  source_code_hash = data.archive_file.iam_policy_rollback_detector_lambda.output_base64sha256
+
+  timeout     = 20
+  memory_size = 256
+
+  environment {
+    variables = {
+      PROJECT_PREFIX = var.project_prefix
+    }
+  }
+
+  depends_on = [aws_cloudwatch_log_group.iam_policy_rollback_detector_lambda]
+}
+
+resource "aws_cloudwatch_event_rule" "iam_policy_rollback_detector" {
+  name        = "${var.project_prefix}-iam-policy-rollback"
+  description = "Detect IAM policy default version rollback via SetDefaultPolicyVersion and create Security Hub finding"
+
+  # CloudTrail management events delivered to EventBridge use the service as the source,
+  # e.g. "aws.iam", with detail-type "AWS API Call via CloudTrail".
+  event_pattern = <<EOF
+{
+  "source": ["aws.iam"],
+  "detail-type": ["AWS API Call via CloudTrail"],
+  "detail": {
+    "eventSource": ["iam.amazonaws.com"],
+    "eventName": ["SetDefaultPolicyVersion"]
+  }
+}
+EOF
+}
+
+resource "aws_cloudwatch_event_target" "iam_policy_rollback_to_lambda" {
+  rule      = aws_cloudwatch_event_rule.iam_policy_rollback_detector.name
+  target_id = "iam-policy-rollback-detector"
+  arn       = aws_lambda_function.iam_policy_rollback_detector.arn
+}
+
+resource "aws_lambda_permission" "allow_events_iam_policy_rollback_detector" {
+  statement_id  = "AllowExecutionFromEventBridgeIamPolicyRollbackDetector"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.iam_policy_rollback_detector.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.iam_policy_rollback_detector.arn
+}
+
+###############################
 # Security Hub → SNS kill-chain notifications
 ###############################
 

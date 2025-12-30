@@ -416,6 +416,71 @@ High-level ML triage architecture:
 
 ---
 
-## 11. Next Steps/Extensions
- 
-- Use **CloudGoat** to simulate realistic threats and validate best-practice responses.
+## 11. **CloudGoat** to simulate realistic threats 
+
+This lab can be paired with **CloudGoat** to generate realistic attack traffic in
+the same AWS account/region, then let my-soc detect and triage it end-to-end.
+
+### 11.1 Install & configure CloudGoat (local workstation)
+
+- Install CloudGoat with Poetry 
+- Configure AWS profile to point at the **same account/region** as my-soc:
+  - `poetry run cloudgoat config aws`
+  - Choose an existing AWS CLI profile and region (for example `us-east-1`).
+- Configure the IP whitelist so only your IP can reach the scenarios:
+  - `poetry run cloudgoat config whitelist auto`
+
+### 11.2 Run the IAM privilege-abuse scenario (iam_privesc_by_rollback)
+
+Create the scenario:
+
+```powershell
+cd C:\work\cloudgoat
+poetry run cloudgoat list           # see available scenarios
+poetry run cloudgoat create iam_privesc_by_rollback
+```
+
+CloudGoat prints the low-privileged IAM user credentials. Configure an AWS
+profile (for example `cg-rollback`) for that user:
+
+```powershell
+aws configure --profile cg-rollback
+```
+
+Using `cg-rollback`, enumerate the CloudGoat-managed IAM policy and its
+versions (you should already have identified which version `v1` is the
+administrator version):
+
+```powershell
+$policyArn = "arn:aws:iam::ACCOUNT_ID:policy/CG_POLICY_NAME"
+aws iam list-policy-versions --policy-arn $policyArn --profile cg-rollback
+```
+
+Then attempt to roll back the policy default version to the admin version:
+
+```powershell
+aws iam set-default-policy-version `
+  --policy-arn $policyArn `
+  --version-id v1 `
+  --profile cg-rollback
+```
+
+Depending on where you are in the scenario, this may succeed (real privilege
+escalation) or return `AccessDenied`—both cases generate a CloudTrail
+`SetDefaultPolicyVersion` management event that flows into my-soc.
+
+When you are done with the attack path and testing, clean up the scenario:
+
+```powershell
+cd C:\work\cloudgoat
+poetry run cloudgoat destroy iam_privesc_by_rollback
+```
+
+### 11.3 How my-soc detects IAM policy rollback (Privilege Abuse)
+
+Terraform adds a small pipeline that turns the CloudGoat IAM rollback into a
+Security Hub finding which then flows through ML triage and incident handling, this gives you a full **Privilege Abuse** storyline:
+
+CloudGoat attacker → IAM policy rollback → CloudTrail → EventBridge →
+`iam_policy_rollback_detector` Lambda → Security Hub custom finding →
+ML auto-triage → NOTIFIED → incident + email 
