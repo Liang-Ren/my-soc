@@ -410,6 +410,10 @@ rule `aws_cloudwatch_event_rule.securityhub_escalated` and the
 manual analyst escalation: a kill-chain incident is created/updated in DynamoDB and a
 consolidated incident email is sent via the kill-chain SNS topic.
 
+High-level ML triage architecture:
+
+![alt text](image.png)
+
 ### 10.5 Notes on Terraform Rebuild (Destroy & Apply)
 
 The following manual CLI needed after **Destroy** 
