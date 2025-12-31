@@ -5,7 +5,7 @@
 This repo defines a small **SOC** in AWS:
 
 - **Assets**: 1 Application Load Balancer + 2 web servers (HTTP only, page says `"hello, Liang from my-soc."`)
-- **Log sources**: VPC Flow Logs, CloudTrail, AWS Config (baseline), Security Hub, GuardDuty (CloudWatch Agent + DNS logs can be added as extensions), Inspector, Macie 
+- **Log sources**: VPC Flow Logs, CloudTrail, AWS Config (baseline), CloudWatch Agent, DNS logs, GuardDuty, Inspector, Macie 
 - **Attack scenarios (4 core + CloudGoat extension)**:
   1. Account takeover (ConsoleLogin)
   2. Privilege abuse (over-privileged IAM)
@@ -107,7 +107,7 @@ This matches the end-to-end story: **Threat Model → Detection → Kill-chain r
 
 ---
 
-## 4. Advanced Logging & Analytics 
+## 4. Advanced Logging  
 
 These pieces are implemented in `terraform/advanced_logging.tf` and by updating the web EC2 instances:
 
@@ -157,14 +157,6 @@ Each `.md` describes **Containment/Eradication/Recovery** for:
 3. `scenario3_public_s3.md` – public S3 bucket exposure
 4. `scenario4_guardduty_critical.md` – critical GuardDuty finding
 
-In a real SOC, playbooks are not just documentation – they are often **codified and partially automated**:
-
-- An orchestration layer (SOAR/Step Functions/Lambda/SSM Automation) encodes the playbook steps:
-  - Automatically enrich context (asset info, owner, geo-IP, recent activity).
-  - Perform **safe** actions (tag resources, open tickets, notify Slack/Teams).
-  - For high‑confidence scenarios (e.g. clearly public S3 buckets), optionally perform **auto‑remediation** (block public access, revoke keys), often behind an approval step.
-- Analysts keep a **human-readable runbook** (like the files in `playbooks/`) in sync with the executable workflow.
-
 In this lab, several response actions are already automated or semi-automated with Terraform + Lambda (see `terraform/response_automation.tf` + `terraform/lambda/`):
 
 -- **Scenario 1 – Account Takeover**  
@@ -188,7 +180,7 @@ In this lab, several response actions are already automated or semi-automated wi
 In short:
 
 - **Alert**: GuardDuty / Security Hub remain the initial alert sources.  
-- **Triage**: `triage_automation.tf` + detections/ provide semi-automatic triage links and queries.  
+- **Triage**: `triage_automation.tf` provide semi-automatic triage links and queries.  
 - **Response**: `response_automation.tf` turns key playbook actions (closing public S3, quarantining EC2, approving IAM rollback) into one-click or fully automated workflows.
 
 ---
@@ -355,7 +347,7 @@ endpoint for **every imported Security Hub finding**:
 - Triggered by `aws_cloudwatch_event_rule.securityhub_all_for_ml`, which matches all
   `Security Hub Findings - Imported` events (all severities).
 - For each finding, the Lambda:
-  - Extracts a simple 10-dimension feature vector (severity bucket, number of resources,
+  - Extracts a simple multi-dimension feature vector (severity bucket, number of resources,
     product hints, title/description length, S3/public hints, etc.).
   - Calls the SageMaker endpoint (`my-soc-rf-endpoint` by default) using
     `sagemaker-runtime.invoke_endpoint` with `text/csv` payload.
