@@ -1,4 +1,4 @@
-# my-soc: Terraform SOC (Threat Model → Detection → Response → Automation/MITRE/ML → CloudGoat) 
+# my-soc: Threat Model → Detection → Response → Automation/MITRE/ML → CloudGoat
 
 ![alt text](image-1.png)
 > Goal: Show pipeline **Threat Model → Detection → Response → ML** on AWS using Terraform, native security services, and a small SageMaker model.
