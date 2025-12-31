@@ -3,7 +3,7 @@
 ![alt text](image-1.png)
 > Goal: Show pipeline **Threat Model → Detection → Response → ML** on AWS using Terraform, native security services, and a small SageMaker model.
 
-This repo defines a small **SOC** in AWS:
+This repo defines a full **SOC** in AWS:
 
 - **Assets**: 1 Application Load Balancer + 2 web servers (HTTP only, page says `"hello, Liang from my-soc."`)
 - **Log sources**: VPC Flow Logs, CloudTrail, AWS Config (baseline), CloudWatch Agent, DNS logs, GuardDuty, Inspector, Macie 
