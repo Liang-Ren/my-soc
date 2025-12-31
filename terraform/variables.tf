@@ -39,3 +39,9 @@ variable "sagemaker_endpoint_name" {
   type        = string
   default     = "my-soc-rf-endpoint"
 }
+
+variable "notification_email" {
+  description = "Email address subscribed to triage and kill-chain SNS topics"
+  type        = string
+  default     = "liang.ren@live.ca"
+}

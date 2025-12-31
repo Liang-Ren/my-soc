@@ -61,7 +61,7 @@ resource "aws_sns_topic" "triage" {
 resource "aws_sns_topic_subscription" "triage_email" {
   topic_arn = aws_sns_topic.triage.arn
   protocol  = "email"
-  endpoint  = "liang.ren@live.ca"
+  endpoint  = var.notification_email
 }
 
 resource "aws_lambda_function" "triage_links" {

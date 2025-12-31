@@ -1,20 +1,23 @@
-# my-soc: Terraform SOC Lab (Threat Model → Detection → Response/Automation/MITRE/ML)
+# my-soc: Terraform SOC (Threat Model → Detection → Response → Automation/MITRE/ML → CloudGoat) 
 
-> Goal: Show pipeline **Threat Model → Detection → Response** on AWS using Terraform + native security services.
+> Goal: Show pipeline **Threat Model → Detection → Response → ML** on AWS using Terraform, native security services, and a small SageMaker model.
 
-This repo defines a small **SOC lab** in AWS:
+This repo defines a small **SOC** in AWS:
 
 - **Assets**: 1 Application Load Balancer + 2 web servers (HTTP only, page says `"hello, Liang from my-soc."`)
-- **Log sources**: VPC Flow Logs, CloudTrail, AWS Config (baseline), Security Hub, GuardDuty (CloudWatch Agent + DNS logs can be added as extensions)
-- **Attack scenarios (4)**:
+- **Log sources**: VPC Flow Logs, CloudTrail, AWS Config (baseline), Security Hub, GuardDuty (CloudWatch Agent + DNS logs can be added as extensions), Inspector, Macie 
+- **Attack scenarios (4 core + CloudGoat extension)**:
   1. Account takeover (ConsoleLogin)
   2. Privilege abuse (over-privileged IAM)
   3. Public S3 bucket
   4. High-severity GuardDuty findings
-- **Outputs**:
-  - Detections: ready-to-run queries and rule ideas (CloudWatch Logs Insights/Athena) under `detections/`
-  - All findings flow into **Security Hub**, and HIGH/CRITICAL ones go to an **SNS kill-chain topic**
-  - Playbooks (Containment/Eradication/Recovery) under `playbooks/`
+  5. *(Extension)* IAM privilege escalation by policy rollback using CloudGoat `iam_privesc_by_rollback`, detected via custom CloudTrail → Security Hub pipeline
+- **Outputs & automation**:
+  - Triage/Analysis: ready-to-run queries and rule ideas (CloudWatch Logs Insights/Athena/OpenSearch) under `detections/`
+  - All findings flow into **Security Hub**; HIGH/CRITICAL ones and ML- or analyst-escalated findings feed a **kill-chain incident pipeline**
+  - Response playbooks (Containment/Eradication/Recovery) under `playbooks/`
+  - ML auto-triage of all Security Hub findings using a small SageMaker RandomForest endpoint
+  - CloudGoat-driven IAM rollback detection: `iam_policy_rollback_detector` turns `SetDefaultPolicyVersion` API calls into custom Security Hub findings (Privilege Abuse)
 
 ---
 
@@ -34,10 +37,10 @@ High-level architecture:
   - GuardDuty detector enabled
   - Security Hub enabled with CIS + Foundational Best Practices
   - Macie2 account + Inspector2 enabled for EC2/ECR/Lambda
-- **Kill-chain notifications**
-  - EventBridge rule listens for **Security Hub high/critical findings**
-  - Matching findings are sent to an SNS topic `my-soc-killchain-topic`
-  - You can subscribe email/SMS/HTTP endpoints for demo purposes
+- **Kill-chain notifications & ML triage**
+  - EventBridge rule listens for **Security Hub high/critical Findings/Kill-Chain** and sends them to an SNS topic `my-soc-killchain-topic`
+  - A separate EventBridge rule sends **all imported Security Hub findings** to `my-soc-ml-auto-triage`, which triage them via a SageMaker endpoint and may set `Workflow.Status = NOTIFIED`
+  - Another EventBridge rule listens for findings where `Workflow.Status = NOTIFIED` and invokes `my-soc-escalate-finding-to-incident` to write/merge incidents in DynamoDB and send consolidated emails via the kill-chain SNS topic
 
 ---
 
@@ -46,7 +49,7 @@ High-level architecture:
 Directory: `terraform/`
 
 - `providers.tf` – Terraform + AWS provider
-- `variables.tf` – region, CIDRs, instance type, name prefix
+- `variables.tf` – region, CIDRs, instance type, name prefix, SageMaker endpoint name, notification email 
 - `networking_infra.tf` – VPC, public subnets, IGW, route tables, security groups, ALB, target group, 2 web EC2s
 - `logging_and_security.tf` –
   - Encrypted S3 logs bucket (CloudTrail/Config)
@@ -54,8 +57,17 @@ Directory: `terraform/`
   - VPC Flow Logs → CloudWatch Logs
   - AWS Config recorder + delivery channel + S3 public access rules
   - GuardDuty, Security Hub, Macie2, Inspector2
-  - EventBridge rule + SNS topic for Security Hub HIGH/CRITICAL findings (kill-chain path)
-- `outputs.tf` – ALB DNS name, logs bucket name, GuardDuty detector ID, SNS topic ARN
+  - SNS kill-chain topic + EventBridge rule for Security Hub HIGH/CRITICAL findings
+  - IAM policy rollback detector (CloudTrail `SetDefaultPolicyVersion` → Lambda → Security Hub custom finding)
+- `advanced_logging.tf` – CloudWatch Agent log groups for web servers, Route 53 Resolver query logging, Glue + Athena (CloudTrail tables in a `my-soc_security_logs` database)
+- `opensearch_logging.tf` – OpenSearch domain for log search, Kinesis Firehose delivery stream, and CloudWatch Logs subscription filters (web OS/app + DNS logs → OpenSearch)
+- `response_automation.tf` – Response actions for playbooks: S3 public bucket auto-remediation, EC2 quarantine SG + Security Hub custom action plumbing, IAM privilege-abuse approval API stub
+- `incident_manager.tf` – Kill-chain incidents DynamoDB table, daily aggregator Lambda, and `escalate_finding_to_incident` (Workflow.Status = NOTIFIED → incident + SNS email)
+- `triage_automation.tf` –
+  - Semi-auto triage helper: Security Hub HIGH/CRITICAL findings → triage-links Lambda → triage SNS topic
+  - ML auto-triage: all imported Security Hub findings → `my-soc-ml-auto-triage` Lambda → SageMaker endpoint → `Workflow.Status` updates
+- `ml_training.tf` – ML models S3 bucket, upload of `ml/train_random_forest.tar.gz`, and SageMaker execution role used by the RandomForest training job and model/endpoint steps (Section 10)
+- `outputs.tf` – ALB DNS name, logs bucket name, GuardDuty detector ID, SNS kill-chain topic ARN
 
 ### Quick Start
 
@@ -78,45 +90,63 @@ After apply finishes, Terraform will output:
 
 ---
 
-## 3. Triage & Analysis Content (detections/)
+## 3. How Logs & Findings Flow
 
-Directory: `detections/`
+1. **Web traffic** hits ALB → EC2 web servers.
+2. **VPC Flow Logs** capture network metadata for detection of scans/suspicious traffic.
+3. **CloudTrail** records API activity (login attempts, IAM policy changes, S3 policy changes, etc.).
+4. **AWS Config** continuously evaluates S3 public access rules.
+5. **GuardDuty** analyzes CloudTrail, VPC Flow, DNS, etc. and generates findings.
+6. **Security Hub** aggregates:
+   - GuardDuty findings
+   - Config rule violations/findings
+   - Macie/Inspector issues/findings 
+7. **EventBridge** rule matches HIGH/CRITICAL Security Hub findings and forwards them to **SNS kill-chain topic**.
 
-These are **second-stage triage / analysis queries** you run **after an initial alert** from GuardDuty / Security Hub. They help you confirm, scope, and understand the root cause of an incident.
-
-For each scenario you have:
-
-1. `cloudtrail_account_takeover.md`
-  - Threat: stolen credentials used for Console login
-  - MITRE: `T1078 Valid Accounts`, `T1078.004 Cloud Accounts`
-  - When to use: after a GuardDuty / Security Hub login‑related alert (e.g. anomalous console login, brute force) to validate "many failures then success" patterns and investigate IPs / devices.
-2. `privilege_abuse.md`
-  - Threat: over-privileged IAM principal changing/using `*:*` policies
-  - MITRE: `T1098 Account Manipulation`, `T1068 Exploitation for Privilege Escalation`
-  - When to use: after a privilege‑escalation / new‑admin‑role type finding in GuardDuty / Security Hub to review exact IAM policy changes.
-3. `public_s3_bucket.md`
-  - Threat: public S3 bucket used for data exposure/exfiltration
-  - MITRE: `T1530 Data from Cloud Storage`, `T1567.002 Exfiltration to Cloud Storage`
-  - When to use: after Config / Security Hub flags a public S3 bucket to confirm which bucket, who changed it, and potential exposure window.
-4. `guardduty_high_severity.md`
-  - Threat: HIGH/CRITICAL GuardDuty findings
-  - Mapping to various ATT&CK techniques depending on finding type
-  - When to use: when there are multiple high‑severity findings and you want to group them by resource / type / time (via Athena) to see campaigns or kill‑chain patterns.
-
-**End-to-end usage (Alert → Triage → Response)**
-
-Each detection file is meant to be used in an end‑to‑end flow:
-
-- **Scenario 1 – Account takeover**: GuardDuty / Security Hub raises login‑related findings → you triage with `cloudtrail_account_takeover.md` (ConsoleLogin patterns, IP/UA/geo, follow‑up API calls) → you execute response steps in `playbooks/scenario1_account_takeover.md`.
-- **Scenario 2 – Privilege abuse**: Security Hub / Config / GuardDuty flags risky IAM changes → you triage with `privilege_abuse.md` (who changed which policy, and how it was used) → you follow `playbooks/scenario2_privilege_abuse.md` to roll back permissions and harden IAM.
-- **Scenario 3 – Public S3 bucket**: Config / Security Hub detects a public bucket → you triage with `public_s3_bucket.md` (which bucket, who changed it, whether it was accessed) → you run `playbooks/scenario3_public_s3.md` to block public access and assess exposure.
-- **Scenario 4 – High‑severity GuardDuty campaign**: multiple HIGH/CRITICAL GuardDuty findings fire → you triage with `guardduty_high_severity.md` (group by resource / principal / time via Athena) → you apply `playbooks/scenario4_guardduty_critical.md` to contain impacted resources.
-
-Notes: In production, these queries would be encoded as SIEM/Security Lake **alert/analytics rules**; here they are shown as Insights/Athena/OpenSearch queries for validation, triage, and threat hunting. 
+This matches the end-to-end story: **Threat Model → Detection → Kill-chain report → (manual or automated) Response**.
 
 ---
 
-## 4. Response Playbooks & Automation (playbooks/ + Lambda)
+## 4. Advanced Logging & Analytics 
+
+These pieces are implemented in `terraform/advanced_logging.tf` and by updating the web EC2 instances:
+
+- **CloudWatch Agent on web servers (OS/app logs)**
+  - CloudWatch Logs → `/aws/my-soc/web-os` and `/aws/my-soc/web-app` to see OS and HTTP logs per instance.
+
+- **Route 53 Resolver query logging for DNS visibility**
+  - CloudWatch Logs → `/aws/my-soc/route53-resolver` to see DNS queries from resources in the VPC.
+
+- **Athena + Glue Catalog foundation for deeper correlation**
+  - Go to Glue Crawler → setup table data source → data formalized → advanced correlation at SQL level ready 
+  - Go to Athema query whatever you want in DB `my-soc_security_logs`.
+
+- **OpenSearch for full-text search and dashboards**
+  - Stream CloudWatch Logs into OpenSearch for your full-text search and correlation query.
+  - Manually setup observability search and security analytics → Indexing → SIEM Query → Alerting 
+
+---
+
+## 5. Semi-Automatic Triage & Analysis (Lambda + SNS)
+
+Implemented in `terraform/triage_automation.tf` + `terraform/lambda/triage_links_handler.py`.
+
+- **Trigger**: existing EventBridge rule for HIGH/CRITICAL Security Hub findings now also invokes a Lambda (`my-soc-triage-links`).
+- **Logic**: the Lambda inspects the finding and classifies it into one of the 4 lab scenarios:
+  - Account takeover → `detections/cloudtrail_account_takeover.md` / `playbooks/scenario1_account_takeover.md`
+  - Privilege abuse → `detections/privilege_abuse.md` / `playbooks/scenario2_privilege_abuse.md`
+  - Public S3 bucket → `detections/public_s3_bucket.md` / `playbooks/scenario3_public_s3.md`
+  - Other high-severity GuardDuty → `detections/guardduty_high_severity.md` / `playbooks/scenario4_guardduty_critical.md`
+- **Output**: publishes an email to SNS topic `${var.project_prefix}-triage-topic` (subscribed to `var.notification_email`) containing:
+  - Severity, finding ID, and a **Security Hub finding URL** (best-effort deep link).
+  - Which scenario to use, and which detections/playbook docs to open.
+  - Short triage hints (which log sources / queries to run).
+
+This turns the detections/ content into a **semi-automatic triage helper**: once an alert fires, you receive an email that points you directly to the right scenario, finding page, and analysis steps.
+
+---
+
+## 6. Response Playbooks & Automation (playbooks/ + Lambda)
 
 Directory: `playbooks/`
 
@@ -163,75 +193,7 @@ In short:
 
 ---
 
-## 5. How Logs & Findings Flow
-
-1. **Web traffic** hits ALB → EC2 web servers.
-2. **VPC Flow Logs** capture network metadata for detection of scans/suspicious traffic.
-3. **CloudTrail** records API activity (login attempts, IAM policy changes, S3 policy changes, etc.).
-4. **AWS Config** continuously evaluates S3 public access rules.
-5. **GuardDuty** analyzes CloudTrail, VPC Flow, DNS, etc. and generates findings.
-6. **Security Hub** aggregates:
-   - GuardDuty findings
-   - Config rule violations/findings
-   - Macie/Inspector issues/findings 
-7. **EventBridge** rule matches HIGH/CRITICAL Security Hub findings and forwards them to **SNS kill-chain topic**.
-
-This matches the end-to-end story: **Threat Model → Detection → Kill-chain report → (manual or automated) Response**.
-
----
-
-## 6. Advanced Logging & Analytics (New Modules)
-
-These pieces are implemented in `terraform/advanced_logging.tf` and by updating the web EC2 instances:
-
-- **CloudWatch Agent on web servers (OS/app logs)**
-  - CloudWatch Logs → `/aws/my-soc/web-os` and `/aws/my-soc/web-app` to see OS and HTTP logs per instance.
-
-- **Route 53 Resolver query logging for DNS visibility**
-  - CloudWatch Logs → `/aws/my-soc/route53-resolver` to see DNS queries from resources in the VPC.
-
-- **Athena + Glue Catalog foundation for deeper correlation**
-  - Go to Glue Crawler → setup table data source → data formalized → advanced correlation at SQL level ready 
-  - Go to Athema query whatever you want in DB `my-soc_security_logs`.
-
-- **OpenSearch for full-text search and dashboards**
-  - Stream CloudWatch Logs into OpenSearch for your full-text search and correlation query.
-  - Manually setup observability search and security analytics → Indexing → SIEM Query → Alerting 
-
----
-
-## 7. Semi-Automatic Triage & Analysis (Lambda + SNS)
-
-Implemented in `terraform/triage_automation.tf` + `terraform/lambda/triage_links_handler.py`.
-
-- **Trigger**: existing EventBridge rule for HIGH/CRITICAL Security Hub findings now also invokes a Lambda (`my-soc-triage-links`).
-- **Logic**: the Lambda inspects the finding and classifies it into one of the 4 lab scenarios:
-  - Account takeover → `detections/cloudtrail_account_takeover.md` / `playbooks/scenario1_account_takeover.md`
-  - Privilege abuse → `detections/privilege_abuse.md` / `playbooks/scenario2_privilege_abuse.md`
-  - Public S3 bucket → `detections/public_s3_bucket.md` / `playbooks/scenario3_public_s3.md`
-  - Other high-severity GuardDuty → `detections/guardduty_high_severity.md` / `playbooks/scenario4_guardduty_critical.md`
-- **Output**: publishes an email to SNS topic `${var.project_prefix}-triage-topic` (subscribed to `liang.ren@live.ca`) containing:
-  - Severity, finding ID, and a **Security Hub finding URL** (best-effort deep link).
-  - Which scenario to use, and which detections/playbook docs to open.
-  - Short triage hints (which log sources / queries to run).
-
-This turns the detections/ content into a **semi-automatic triage helper**: once an alert fires, you receive an email that points you directly to the right scenario, finding page, and analysis steps.
-
----
-
-## 8. How to Pitch This Project
-
-- **One-liner**: "Built a Terraform-based AWS SOC lab (ALB + web servers) with CloudTrail, VPC Flow Logs, Config, GuardDuty, Security Hub, and kill-chain notifications, plus detection content and IR playbooks mapped to MITRE ATT&CK."
-- **Problem you solve**: Provide a reproducible lab to test and demonstrate cloud threat detection and incident response workflows.
-- **Tech stack**: Terraform, AWS (VPC, EC2, ALB, S3, CloudTrail, Config, GuardDuty, Security Hub, Macie2, Inspector2, SNS, EventBridge).
-- **Talking points**:
-  - How each log source contributes to detection
-  - How Security Hub + EventBridge + SNS form a simple kill-chain pipeline
-  - How you mapped scenarios to MITRE and wrote playbooks for Containment/Eradication/Recovery.
-
----
-
-## 9. Build a consolidated **kill-chain Incident**
+## 7. Build a consolidated **kill-chain Incident**
 
 This lab now has a **simulated Incident Manager** built from Security Hub + Lambda + DynamoDB + SNS:
 
@@ -252,7 +214,7 @@ Together, these give you consolidated kill-chain **Incidents** per host, both fr
 
 ---
 
-## 10. ML-driven Triage (Finding to Incident Automatically)
+## 8. ML-driven Triage (Finding to Incident Automatically)
 
 This lab includes the **training side** of an ML model that can later be used to decide
 whether a single Security Hub finding should be escalated to an incident automatically.
@@ -264,7 +226,7 @@ whether a single Security Hub finding should be escalated to an incident automat
 - **Model export**: SageMaker writes the trained model artifact to the S3 bucket
   `${var.project_prefix}-ml-models-${account_id}` under the `artifacts/` prefix.
 
-### 10.1 Infrastructure Terraform creates
+### 8.1 Infrastructure Terraform creates
 
 Implemented in `terraform/ml_training.tf`:
 
@@ -278,7 +240,7 @@ Implemented in `terraform/ml_training.tf`:
 After `terraform apply` succeeds, the **code and IAM role are ready**, but we
 start the actual SageMaker training job via AWS CLI.
 
-### 10.2 Start the SageMaker training job (PowerShell + AWS CLI)
+### 8.2 Start the SageMaker training job (PowerShell + AWS CLI)
 
 Prerequisites:
 
@@ -315,13 +277,13 @@ What happens:
   the model into `/opt/ml/model/model.joblib`.
 - SageMaker uploads `/opt/ml/model` as a tarball to `s3://$bucket/artifacts/...`.
 
-### 10.3 Deploy a real-time inference endpoint (SageMaker)
+### 8.3 Deploy a real-time inference endpoint (SageMaker)
 
 Once the training job `my-soc-random-forest` has completed successfully and
 written `model.tar.gz` into the ML models bucket, you can expose a real-time
 inference API using a SageMaker endpoint.
 
-#### 10.3.1. **Create a SageMaker model** (binds the artifact + image + entrypoint):
+#### 8.3.1. **Create a SageMaker model** (binds the artifact + image + entrypoint):
 
    The scikit-learn container needs to know **which Python script to run** and
    where to download it from. We point it at the same training script tarball
@@ -344,7 +306,7 @@ inference API using a SageMaker endpoint.
      --execution-role-arn $roleArn
    ```
 
-#### 10.3.2. **Create an endpoint config** (instance type/count, traffic routing):
+#### 8.3.2. **Create an endpoint config** (instance type/count, traffic routing):
 
    ```powershell
    $configName = "my-soc-rf-endpoint-config"
@@ -354,7 +316,7 @@ inference API using a SageMaker endpoint.
      --production-variants "VariantName=AllTraffic,ModelName=$modelName,InitialInstanceCount=1,InstanceType=ml.m5.large"
    ```
 
-#### 10.3.3. **Create the real-time endpoint** (the actual API):
+#### 8.3.3. **Create the real-time endpoint** (the actual API):
 
    ```powershell
    $endpointName = "my-soc-rf-endpoint"
@@ -367,7 +329,7 @@ inference API using a SageMaker endpoint.
    Wait until the endpoint status becomes `InService` in the SageMaker console
    or via `aws sagemaker describe-endpoint`.
 
-#### 10.3.4. **Call the endpoint for a prediction** (example, CSV input):
+#### 8.3.4. **Call the endpoint for a prediction** (example, CSV input):
 
    The default scikit-learn container expects tabular features, commonly as a
    single CSV line. Assuming the model was trained on 10 numeric features:
@@ -384,7 +346,7 @@ inference API using a SageMaker endpoint.
    Get-Content .\ml\output.json
    ```
 
-### 10.4 ML Auto-Triage from Security Hub Findings
+### 8.4 ML Auto-Triage from Security Hub Findings
 
 Terraform now wires an **ML auto-triage Lambda** that calls this SageMaker
 endpoint for **every imported Security Hub finding**:
@@ -416,12 +378,12 @@ High-level ML triage architecture:
 
 ---
 
-## 11. **CloudGoat** to simulate realistic threats 
+## 9. **CloudGoat** to simulate realistic threats 
 
 This lab can be paired with **CloudGoat** to generate realistic attack traffic in
 the same AWS account/region, then let my-soc detect and triage it end-to-end.
 
-### 11.1 Install & configure CloudGoat (local workstation)
+### 9.1 Install & configure CloudGoat (local workstation)
 
 - Install CloudGoat with Poetry 
 - Configure AWS profile to point at the **same account/region** as my-soc:
@@ -430,7 +392,7 @@ the same AWS account/region, then let my-soc detect and triage it end-to-end.
 - Configure the IP whitelist so only your IP can reach the scenarios:
   - `poetry run cloudgoat config whitelist auto`
 
-### 11.2 Run the IAM privilege-abuse scenario (iam_privesc_by_rollback)
+### 9.2 Run the IAM privilege-abuse scenario (iam_privesc_by_rollback)
 
 Create the scenario:
 
@@ -476,7 +438,7 @@ cd C:\work\cloudgoat
 poetry run cloudgoat destroy iam_privesc_by_rollback
 ```
 
-### 11.3 How my-soc detects IAM policy rollback (Privilege Abuse)
+### 9.3 How my-soc detects IAM policy rollback (Privilege Abuse)
 
 Terraform adds a small pipeline that turns the CloudGoat IAM rollback into a
 Security Hub finding which then flows through ML triage and incident handling, this gives you a full **Privilege Abuse** storyline:

@@ -430,7 +430,7 @@ resource "aws_sns_topic" "killchain" {
 resource "aws_sns_topic_subscription" "killchain_email" {
   topic_arn = aws_sns_topic.killchain.arn
   protocol  = "email"
-  endpoint  = "liang.ren@live.ca"
+  endpoint  = var.notification_email
 }
 
 resource "aws_sns_topic_policy" "allow_events" {
