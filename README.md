@@ -439,3 +439,8 @@ Security Hub finding which then flows through ML triage and incident handling, t
 CloudGoat attacker → IAM policy rollback → CloudTrail → EventBridge →
 `iam_policy_rollback_detector` Lambda → Security Hub custom finding →
 ML auto-triage → NOTIFIED → incident + email 
+
+--- 
+
+## 10. Future to go 
+Policy-as-Code via OPA to enforce security controls.  
